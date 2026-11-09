@@ -1,0 +1,138 @@
+name: Build the PDF engine
+
+# Builds lib/pdfjs.js from Mozilla's PDF.js 6.2.108 with three small changes that keep scrolling
+# and zooming smooth (they are described in the script below). It runs by itself when this file
+# changes, and you can run it again from the Actions tab.
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/build-pdf-engine.yml'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: build-pdf-engine
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Build lib/pdfjs.js
+        run: |
+          mkdir -p "$RUNNER_TEMP/pdfjs/.gen"
+          cd "$RUNNER_TEMP/pdfjs"
+          npm init -y > /dev/null
+          npm install --no-audit --no-fund pdfjs-dist@6.2.108 esbuild@0.28.2
+          cat > .gen/render-yield.js <<'EOF'
+          /* Folio Reader: pdf.js draws each page in short slices. Normally it waits for the next animation
+             frame between slices; here it pauses only long enough for the browser to show a frame, so pages
+             finish sooner and scrolling, zooming and animations stay smooth while they are drawn. */
+          const queue = new Map();
+          let nextId = 1;
+          const channel = new MessageChannel();
+          channel.port1.onmessage = (event) => {
+            const fn = queue.get(event.data);
+            if (!fn) return;
+            queue.delete(event.data);
+            fn();
+          };
+          globalThis.__folioYield = (fn) => {
+            const id = nextId++;
+            queue.set(id, fn);
+            channel.port2.postMessage(id);
+            return id;
+          };
+          globalThis.__folioCancelYield = (id) => { queue.delete(id); };
+          // How long each slice may run, in milliseconds (pdf.js uses 15). Short enough for 120 Hz screens.
+          globalThis.__folioSliceMs = 4;
+          EOF
+          cat > build.mjs <<'EOF'
+          // Applies Folio Reader's three changes to PDF.js and bundles it into lib/pdfjs.js.
+          import fs from 'node:fs';
+          import crypto from 'node:crypto';
+          import { execFileSync } from 'node:child_process';
+
+          const out = process.argv[2];
+          const sha256 = (s) => crypto.createHash('sha256').update(s).digest('hex');
+          function read(file, expected) {
+            const text = fs.readFileSync(file, 'utf8');
+            if (sha256(text) !== expected) throw new Error(`${file} is not the expected PDF.js 6.2.108 file`);
+            return text;
+          }
+          function patchOnce(src, find, replace, what) {
+            const n = src.split(find).length - 1;
+            if (n !== 1) throw new Error(`PDF.js change "${what}" matched ${n} times (expected 1)`);
+            return src.replace(find, replace);
+          }
+
+          // 1. Pages are drawn in short 4 ms slices that give way to the browser between slices (instead of
+          //    15 ms slices timed to animation frames), so frames are never held up, even at 120 Hz.
+          // 2. After zooming, the invisible text layer (used for selecting text) keeps its measurements, which
+          //    scale with the page, instead of measuring every word again in one long, blocking pass.
+          // 3. Lifting a finger no longer re-inserts an element into every text layer after each tap.
+          let core = read('node_modules/pdfjs-dist/legacy/build/pdf.min.mjs', '9fab0c910bf1484835c5c2aeb68f7eb3dfce7f9eb435a004526c5af86d70890c');
+          core = patchOnce(core,
+            'this.#Wr=window.requestAnimationFrame(()=>{this.#Wr=null;this._nextBound().catch(this._cancelBound)})',
+            'this.#Wr=globalThis.__folioYield(()=>{this.#Wr=null;this._nextBound().catch(this._cancelBound)})',
+            'render slices: schedule');
+          core = patchOnce(core, 'window.cancelAnimationFrame(this.#Wr)', 'globalThis.__folioCancelYield(this.#Wr)', 'render slices: cancel');
+          core = patchOnce(core, 'c=h?Date.now()+15:0', 'c=h?Date.now()+(globalThis.__folioSliceMs||15):0', 'render slices: length');
+          core = patchOnce(core,
+            'if(i!==this.#nr){e?.();this.#nr=i;const t={div:null,properties:null,ctx:TextLayer.#br(this.#Ys)};for(const e of this.#or){t.properties=this.#lr.get(e);t.div=e;this.#yr(t)}}',
+            'if(i!==this.#nr){this.#nr=i}',
+            'text layer: keep measurements when zooming');
+          let viewer = read('node_modules/pdfjs-dist/legacy/web/pdf_viewer.mjs', '5a3e66c18f86ce8e59856acb85e1051a8090ff5dfe59e4ca0534c763496cfb4b');
+          viewer = viewer.replace(/\n\/\/# sourceMappingURL=pdf_viewer\.mjs\.map\s*$/, '\n');
+          viewer = patchOnce(viewer, `    const reset = (end, textLayer) => {
+                textLayer.append(end);
+                end.style.width = "";
+                end.style.height = "";
+                textLayer.classList.remove("selecting");
+              };`, `    const reset = (end, textLayer) => {
+                if (end.parentNode !== textLayer || end.nextSibling) textLayer.append(end);
+                if (end.style.width) end.style.width = "";
+                if (end.style.height) end.style.height = "";
+                textLayer.classList.remove("selecting");
+              };`, 'text layer: cheap reset after a tap');
+          fs.writeFileSync('.gen/pdf.min.js', core);
+          fs.writeFileSync('.gen/pdf_viewer.js', viewer);
+          fs.writeFileSync('.gen/pdfjs-entry.js', [
+            "import './render-yield.js';",
+            "import * as pdfjsLib from './pdf.min.js';",
+            "import { EventBus, LinkTarget, PDFLinkService, PDFViewer } from './pdf_viewer.js';",
+            'export { pdfjsLib, EventBus, LinkTarget, PDFLinkService, PDFViewer };',
+            '',
+          ].join('\n'));
+          execFileSync('node_modules/.bin/esbuild', [
+            '.gen/pdfjs-entry.js', '--bundle', '--format=esm', '--minify', '--target=chrome100,edge100,firefox100,safari15.4',
+            '--legal-comments=none', '--log-level=error', `--outfile=${out}`,
+          ], { stdio: 'inherit' });
+          console.log(`Built ${out} (${fs.statSync(out).size} bytes), sha256 ${sha256(fs.readFileSync(out))}`);
+          EOF
+          mkdir -p "$GITHUB_WORKSPACE/lib"
+          node build.mjs "$GITHUB_WORKSPACE/lib/pdfjs.js"
+
+      - name: Save lib/pdfjs.js to the repository
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add lib/pdfjs.js
+          if git diff --cached --quiet; then
+            echo "lib/pdfjs.js is already up to date."
+          else
+            git commit -m "Build the PDF engine (PDF.js 6.2.108)"
+            git push
+          fi
