@@ -5,7 +5,7 @@ A simple PDF reader built with Google's Material Design 3. Use it to read, share
 ## Put it online with GitHub Pages
 
 1. On GitHub, create a new **public** repository, for example `folio-reader`.
-2. Click **uploading an existing file**. Drag in **everything inside this folder**, including the `icons` and `lib` folders, then click **Commit changes**. There are 55 files, which is under GitHub's limit of 100 files per upload.
+2. Click **uploading an existing file**. Drag in **everything inside this folder**, including the `icons` and `lib` folders, then click **Commit changes**. There are 56 files, which is under GitHub's limit of 100 files per upload.
 3. Go to **Settings → Pages**. Under *Build and deployment*, choose **Deploy from a branch**, select the **main** branch and the **/ (root)** folder, then click **Save**.
 4. After a minute or two, open `https://YOUR-USERNAME.github.io/folio-reader/`.
 
@@ -20,7 +20,7 @@ You can also put it in a subfolder of an existing repository, such as your Folio
 ## Features
 
 - Open PDFs from your device, by dragging a file onto the window, or by sharing to the app (Android).
-- Smooth scrolling, pinch or Ctrl+scroll to zoom, double-tap to zoom, fit to width, rotate, and go to page.
+- Smooth scrolling, pinch or Ctrl+scroll to zoom, double-tap to zoom, fit to width, rotate, and go to page. Zooming and moving between screens are animated on the GPU, so they stay smooth on 90 and 120 Hz screens.
 - Clickable links and text you can select and copy.
 - Share (uses your device's share menu) and print (prints every page at full page size).
 - Opens password-protected PDFs.
@@ -38,3 +38,4 @@ To update the app, upload the new files over the old ones (keep the same names).
 - `sw.js`, `manifest.webmanifest`: offline support and installing
 - `icons/`: app icons
 - `lib/`: PDF.js by Mozilla (Apache 2.0 licence), with its fonts and image decoders
+- `.github/workflows/build-pdf-engine.yml`: builds `lib/pdfjs.js` (PDF.js with three small changes that keep scrolling and zooming smooth) on GitHub's servers

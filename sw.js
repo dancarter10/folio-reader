@@ -1,5 +1,5 @@
 /* Folio Reader service worker: offline support and the Android "share to" target. */
-const VERSION = '1.0.0-05ea5ba87c';
+const VERSION = '1.1.0-8fbf1b8f11';
 const CACHE = `folio-reader-${VERSION}`;
 const SHARE_CACHE = 'folio-reader-share';
 const PRECACHE = [
@@ -26,6 +26,7 @@ const PRECACHE = [
   "./lib/images/annotation-pushpin.svg",
   "./lib/pdf.worker.min.js",
   "./lib/pdf_viewer.css",
+  "./lib/pdfjs.js",
   "./lib/standard_fonts/FoxitDingbats.pfb",
   "./lib/standard_fonts/FoxitFixed.pfb",
   "./lib/standard_fonts/FoxitFixedBold.pfb",
