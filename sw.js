@@ -1,5 +1,5 @@
 /* Folio Reader service worker: offline support and the Android "share to" target. */
-const VERSION = '1.1.0-8fbf1b8f11';
+const VERSION = '1.2.0-3380497833';
 const CACHE = `folio-reader-${VERSION}`;
 const SHARE_CACHE = 'folio-reader-share';
 const PRECACHE = [
@@ -46,11 +46,14 @@ const PRECACHE = [
   "./lib/wasm/qcms_bg.wasm",
   "./manifest.webmanifest"
 ];
+// Cached too when they can be fetched, but the app installs without them.
+const OPTIONAL = ["./fonts/google-sans-flex.woff2"];
 
 self.addEventListener('install', (event) => {
   event.waitUntil((async () => {
     const cache = await caches.open(CACHE);
     await cache.addAll(PRECACHE.map((path) => new Request(path, { cache: 'reload' })));
+    await Promise.allSettled(OPTIONAL.map((path) => cache.add(new Request(path, { cache: 'reload' }))));
     await self.skipWaiting();
   })());
 });
