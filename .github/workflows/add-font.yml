@@ -1,0 +1,140 @@
+name: Add the Google Sans Flex font
+
+# Folio Reader's Material 3 Expressive design uses Google Sans Flex (SIL Open Font License 1.1).
+# This downloads it from the Google Fonts repository and saves a small web version in fonts/:
+# only the Latin letters, numbers and symbols the app shows, and only the variable axes it uses.
+# It runs by itself when this file changes, and you can run it again from the Actions tab.
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/add-font.yml'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: add-font
+  cancel-in-progress: true
+
+jobs:
+  font:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Make the web font
+        run: |
+          python -m pip install --quiet --disable-pip-version-check 'fonttools>=4.55' brotli
+          mkdir -p "$RUNNER_TEMP/font" "$GITHUB_WORKSPACE/fonts"
+          cd "$RUNNER_TEMP/font"
+          curl -fsSL --retry 3 -o GoogleSansFlex.ttf 'https://github.com/google/fonts/raw/main/ofl/googlesansflex/GoogleSansFlex%5BROND%2Copsz%2Cslnt%2Cwdth%2Cwght%5D.ttf'
+          curl -fsSL --retry 3 -o OFL.txt 'https://github.com/google/fonts/raw/main/ofl/googlesansflex/OFL.txt'
+          sha256sum GoogleSansFlex.ttf OFL.txt
+          ls -l GoogleSansFlex.ttf
+          head -3 OFL.txt
+          grep -i 'reserved font name' OFL.txt || echo 'The licence has no Reserved Font Name.'
+          cat > make.py <<'EOF'
+          import os, re, shutil, sys
+          from fontTools.ttLib import TTFont
+          from fontTools.varLib import instancer
+          from fontTools import subset
+
+          out_dir = sys.argv[1]
+          SRC = 'GoogleSansFlex.ttf'
+          # Basic Latin, Latin-1 and Latin Extended-A (English and most European languages), punctuation,
+          # currency signs, arrows and a few maths signs. The app's CSS lists the same ranges.
+          UNICODES = ('U+0000-017F,U+0192,U+0218-021B,U+02BB-02BC,U+02C6-02C7,U+02D8-02DD,U+0300-0304,'
+                      'U+0308,U+0327,U+0329,U+1E9E,U+2000-206F,U+20AC,U+20B9,U+2122,U+2190-2193,U+2212,'
+                      'U+2215,U+2248,U+2260,U+2264-2265,U+FEFF,U+FFFD')
+
+          src = TTFont(SRC)
+          axes = {a.axisTag: (a.minValue, a.defaultValue, a.maxValue) for a in src['fvar'].axes}
+          print('Axes (min, default, max):', axes)
+          print('Glyphs in the full font:', len(src.getGlyphOrder()))
+          licence = open('OFL.txt', encoding='utf-8').read()
+          reserved = re.search(r'reserved font name', licence, re.I) is not None
+
+          def clamp(tag, lo, hi):
+              mn, df, mx = axes[tag]
+              lo, hi = max(lo, mn), min(hi, mx)
+              return (lo, min(max(df, lo), hi), hi)
+
+          def make(keep):
+              font = TTFont(SRC)
+              limits = {}
+              for tag, (mn, df, mx) in axes.items():
+                  if tag == 'wght':
+                      limits[tag] = clamp('wght', 400, 800)
+                  elif tag in keep:
+                      limits[tag] = (mn, df, mx)
+                  elif tag == 'wdth':
+                      limits[tag] = 100 if mn <= 100 <= mx else df
+                  elif tag == 'slnt':
+                      limits[tag] = 0 if mn <= 0 <= mx else df
+                  else:
+                      limits[tag] = df
+              opts = subset.Options()
+              opts.layout_features = ['*']
+              opts.name_IDs = ['*']
+              opts.name_languages = ['*']
+              opts.notdef_outline = True
+              sub = subset.Subsetter(opts)
+              sub.populate(unicodes=subset.parse_unicodes(UNICODES))
+              sub.subset(font)
+              font = instancer.instantiateVariableFont(font, limits)
+              if reserved:
+                  # Modified versions may not use a Reserved Font Name, so the web version gets its own name.
+                  for rec in font['name'].names:
+                      if rec.nameID in (1, 3, 4, 6, 16, 21, 25):
+                          rec.string = str(rec.toUnicode()).replace('Google Sans Flex', 'Folio Sans Flex').replace('GoogleSansFlex', 'FolioSansFlex')
+              font.flavor = 'woff2'
+              path = os.path.join(os.environ.get('RUNNER_TEMP', '.'), 'font', 'v-' + ('-'.join(['wght'] + sorted(keep)) or 'wght') + '.woff2')
+              font.save(path)
+              kept = [a.axisTag for a in font['fvar'].axes] if 'fvar' in font else []
+              size = os.path.getsize(path)
+              print(f'  axes {kept}: {size} bytes, {len(font.getGlyphOrder())} glyphs')
+              return path, size, kept
+
+          print('Web versions:')
+          variants = [make(k) for k in (['opsz', 'ROND'], ['opsz'], ['ROND'], [])]
+          # Use the richest version that is still small: optical sizes keep text crisp at every size, and
+          # roundness gives headings their expressive shape.
+          budget = {('ROND', 'opsz', 'wght'): 130_000, ('opsz', 'wght'): 110_000, ('ROND', 'wght'): 90_000, ('wght',): 10**9}
+          for path, size, kept in variants:
+              if size <= budget.get(tuple(sorted(kept)), 0):
+                  break
+          dest = os.path.join(out_dir, 'google-sans-flex.woff2')
+          shutil.move(path, dest)
+          with open(os.path.join(out_dir, 'README.md'), 'w', encoding='utf-8') as fh:
+              fh.write('# Google Sans Flex\n\n'
+                       'A web version of [Google Sans Flex](https://github.com/google/fonts/tree/main/ofl/googlesansflex) '
+                       'for Folio Reader: Latin characters only, with these variable axes: ' + ', '.join(kept) + '.\n\n'
+                       'It is made by `.github/workflows/add-font.yml` and is licensed under the SIL Open Font '
+                       'License 1.1 (see `OFL.txt`).\n')
+          print(f'Saved fonts/google-sans-flex.woff2 ({size} bytes) with axes {kept}')
+          EOF
+          python make.py "$GITHUB_WORKSPACE/fonts"
+          cp OFL.txt "$GITHUB_WORKSPACE/fonts/OFL.txt"
+          ls -l "$GITHUB_WORKSPACE/fonts"
+          sha256sum "$GITHUB_WORKSPACE/fonts/google-sans-flex.woff2"
+
+      - name: Save the font to the repository
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add fonts
+          if git diff --cached --quiet; then
+            echo "fonts/ is already up to date."
+          else
+            git commit -m "Add the Google Sans Flex font"
+            git push
+          fi
