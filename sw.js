@@ -1,5 +1,5 @@
 /* Folio Reader service worker: offline support and the Android "share to" target. */
-const VERSION = '1.2.0-3380497833';
+const VERSION = '1.2.0-d89b1c3ae7';
 const CACHE = `folio-reader-${VERSION}`;
 const SHARE_CACHE = 'folio-reader-share';
 const PRECACHE = [
